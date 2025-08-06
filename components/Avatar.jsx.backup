@@ -1,0 +1,389 @@
+'use client'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { OrbitControls, useGLTF } from '@react-three/drei'
+import * as THREE from 'three'
+import { FBXLoader } from 'three-stdlib'
+import { useEffect, useRef } from 'react'
+
+function AvatarModel({ emotion }) {
+  const { scene, animations } = useGLTF('/model.glb')
+  const mixer = useRef()
+  const actions = useRef({})
+  const currentEmotion = useRef('idle')
+
+  // Add immediate logging
+  console.log('=== Avatar Component Loading ===')
+  console.log('Scene:', scene)
+  console.log('Animations:', animations)
+  console.log('Scene children:', scene?.children?.length || 0)
+
+  // Helper to load FBX animations
+  const loadFBXAnimation = (url, name) => {
+    const loader = new FBXLoader()
+    loader.load(url, (fbx) => {
+      const clip = fbx.animations[0]
+      const action = mixer.current.clipAction(clip)
+      actions.current[name.toLowerCase()] = action
+    })
+  }
+
+  useEffect(() => {
+    console.log('=== useEffect triggered ===')
+    console.log('Scene in useEffect:', scene)
+    console.log('Scene type:', typeof scene)
+    
+    if (!scene) {
+      console.error('Scene is null or undefined!')
+      return
+    }
+
+    try {
+      mixer.current = new THREE.AnimationMixer(scene)
+      console.log('AnimationMixer created successfully')
+
+      // Check if scene has any children
+      console.log('Scene children count:', scene.children.length)
+      scene.children.forEach((child, index) => {
+        console.log(`Child ${index}:`, child.type, child.name || 'unnamed')
+      })
+
+      // Load textures first
+      const textureLoader = new THREE.TextureLoader()
+      const bodyDiffuse = textureLoader.load('/textures/Ch03_Body_diffuse.png')
+      const bodyNormal = textureLoader.load('/textures/Ch03_Body_normal.png')
+      const bodySpecular = textureLoader.load('/textures/Ch03_Body_specularGlossiness.png')
+
+      console.log('Loading textures from /textures/ directory...')
+
+      // AGGRESSIVE material fixing - apply to every single mesh
+      let meshCount = 0
+      scene.traverse((object) => {
+        console.log('Traversing object:', object.type, object.name || 'unnamed')
+        
+        if (object.isMesh) {
+          meshCount++
+          console.log(`Mesh ${meshCount} found: "${object.name || 'unnamed'}"`)
+          
+          // Create vibrant textured material
+          const textureMaterial = new THREE.MeshStandardMaterial({
+            map: bodyDiffuse,
+            normalMap: bodyNormal,
+            roughnessMap: bodySpecular,
+            color: 0xFFDBB3, // Skin tone
+            metalness: 0.0,
+            roughness: 0.6,
+            transparent: false,
+            side: THREE.DoubleSide
+          })
+
+          // FORCE replace material completely
+          object.material = textureMaterial
+          object.material.needsUpdate = true
+          
+          console.log(`  ✅ FORCED textured material onto: ${object.name || 'unnamed mesh'}`)
+          
+          object.castShadow = true
+          object.receiveShadow = true
+        }
+      })
+
+      console.log(`Total meshes processed: ${meshCount}`)
+
+      // Debug: Check what animations are available in model.glb
+      console.log('=== model.glb Analysis ===')
+      console.log('Total animations found:', animations.length)
+      
+      if (animations.length > 0) {
+        console.log('Available animations:')
+        animations.forEach((clip, index) => {
+          console.log(`  ${index + 1}. "${clip.name}" - Duration: ${clip.duration}s`)
+        })
+      } else {
+        console.log('No animations found in model.glb')
+      }
+
+      // Load animations from GLB
+      animations.forEach((clip) => {
+        const actionName = clip.name.toLowerCase()
+        actions.current[actionName] = mixer.current.clipAction(clip)
+        console.log(`Loaded animation: "${clip.name}" as "${actionName}"`)
+      })
+
+      // List all available actions
+      console.log('All available actions:', Object.keys(actions.current))
+
+      // Auto-play first animation if available
+      setTimeout(() => {
+        const actionKeys = Object.keys(actions.current)
+        if (actionKeys.length > 0) {
+          const firstAction = actionKeys[0]
+          console.log(`Auto-playing: ${firstAction}`)
+          actions.current[firstAction].reset().play()
+          actions.current[firstAction].setLoop(THREE.LoopRepeat)
+          currentEmotion.current = firstAction
+        } else {
+          console.log('No animations to play - model might be static')
+        }
+      }, 500)
+      
+    } catch (error) {
+      console.error('Error in useEffect:', error)
+    }
+  }, [scene, animations])
+
+  // Trigger animation on emotion change
+  useEffect(() => {
+    console.log('=== Emotion Change ===')
+    console.log('Requested emotion:', emotion)
+    console.log('Available actions:', Object.keys(actions.current))
+    
+    if (!mixer.current) return
+    
+    if (emotion && actions.current[emotion]) {
+      console.log(`✓ Playing animation: ${emotion}`)
+      // Stop current animation
+      if (actions.current[currentEmotion.current]) {
+        actions.current[currentEmotion.current].stop()
+      }
+      
+      const action = actions.current[emotion]
+      currentEmotion.current = emotion
+      action.reset().play()
+      action.clampWhenFinished = true
+      action.loop = THREE.LoopOnce
+      
+      action.onFinished = () => {
+        console.log('Animation finished, returning to default')
+        const actionKeys = Object.keys(actions.current)
+        if (actionKeys.length > 0) {
+          const defaultAction = actionKeys[0]
+          actions.current[defaultAction].reset().play()
+          actions.current[defaultAction].setLoop(THREE.LoopRepeat)
+          currentEmotion.current = defaultAction
+        }
+      }
+    } else if (emotion) {
+      console.log(`✗ Animation "${emotion}" not found`)
+      console.log('Available:', Object.keys(actions.current))
+    }
+  }, [emotion])
+
+  // Animation frame update
+  useFrame((_, delta) => mixer.current?.update(delta))
+
+  return <primitive object={scene} scale={1} position={[0, -2, 0]} />
+}
+
+export default function Avatar({ emotion }) {
+  return (
+    <Canvas
+      style={{ width: '100%', height: '100%' }}
+      camera={{ 
+        position: [0, 0, 5], 
+        fov: 50,
+        near: 0.1,
+        far: 1000
+      }}
+      shadows
+    >
+      <color attach="background" args={['#e6f0ff']} />
+      
+      {/* Enhanced lighting for better texture visibility */}
+      <ambientLight intensity={0.8} />
+      <directionalLight 
+        position={[5, 5, 5]} 
+        intensity={1.2} 
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+      />
+      <directionalLight position={[-3, 3, 3]} intensity={0.7} />
+      <pointLight position={[0, 2, 0]} intensity={0.5} />
+      <spotLight position={[0, 5, 2]} intensity={0.8} angle={0.6} penumbra={0.2} />
+      
+      <AvatarModel emotion={emotion} />
+      <OrbitControls 
+        enableZoom={true}
+        enablePan={true}
+        enableRotate={true}
+        maxPolarAngle={Math.PI * 0.9}
+        minPolarAngle={Math.PI * 0.1}
+        maxDistance={15}
+        minDistance={2}
+        target={[0, 0, 0]}
+      />
+    </Canvas>
+  )
+} "${object.name || 'unnamed'}"`)
+          
+          // Create a vibrant material to ensure visibility
+          const vibrantMaterial = new THREE.MeshStandardMaterial({
+            map: bodyDiffuse,
+            normalMap: bodyNormal,
+            roughnessMap: bodySpecular,
+            color: 0xFFDBB3, // Skin tone color
+            metalness: 0.1,
+            roughness: 0.7,
+            transparent: false,
+            side: THREE.DoubleSide
+          })
+
+          // Force apply material to every mesh
+          object.material = vibrantMaterial
+          object.material.needsUpdate = true
+          
+          console.log(`  ✓ FORCED skin material onto: ${object.name || 'mesh'}`)
+          
+          object.castShadow = true
+          object.receiveShadow = true
+        }
+      })
+
+      console.log(`Total meshes found: ${meshCount}`)
+
+      // Debug: Check what animations are available in model.glb
+      console.log('=== model.glb Analysis ===')
+      console.log('Total animations found:', animations.length)
+      
+      if (animations.length > 0) {
+        console.log('Available animations:')
+        animations.forEach((clip, index) => {
+          console.log(`  ${index + 1}. "${clip.name}" - Duration: ${clip.duration}s`)
+        })
+      } else {
+        console.log('No animations found in model.glb')
+      }
+
+      // Load animations from GLB
+      animations.forEach((clip) => {
+        const actionName = clip.name.toLowerCase()
+        actions.current[actionName] = mixer.current.clipAction(clip)
+        console.log(`Loaded animation: "${clip.name}" as "${actionName}"`)
+      })
+
+      // List all available actions
+      console.log('All available actions:', Object.keys(actions.current))
+
+      // Auto-play first animation if available
+      setTimeout(() => {
+        const actionKeys = Object.keys(actions.current)
+        if (actionKeys.length > 0) {
+          const firstAction = actionKeys[0]
+          console.log(`Auto-playing: ${firstAction}`)
+          actions.current[firstAction].reset().play()
+          actions.current[firstAction].setLoop(THREE.LoopRepeat)
+          currentEmotion.current = firstAction
+        } else {
+          console.log('No animations to play - model might be static')
+        }
+      }, 500)
+      
+    } catch (error) {
+      console.error('Error in useEffect:', error)
+    }
+
+      // List all available actions
+      console.log('All available actions:', Object.keys(actions.current))
+
+      // Auto-play first animation if available
+      setTimeout(() => {
+        const actionKeys = Object.keys(actions.current)
+        if (actionKeys.length > 0) {
+          const firstAction = actionKeys[0]
+          console.log(`Auto-playing: ${firstAction}`)
+          actions.current[firstAction].reset().play()
+          actions.current[firstAction].setLoop(THREE.LoopRepeat)
+          currentEmotion.current = firstAction
+        } else {
+          console.log('No animations to play - model might be static')
+        }
+      }, 500)
+      
+    } catch (error) {
+      console.error('Error in useEffect:', error)
+    }
+  }, [scene, animations])
+
+  // Trigger animation on emotion change
+  useEffect(() => {
+    console.log('=== Emotion Change ===')
+    console.log('Requested emotion:', emotion)
+    console.log('Available actions:', Object.keys(actions.current))
+    
+    if (!mixer.current) return
+    
+    if (emotion && actions.current[emotion]) {
+      console.log(`✓ Playing animation: ${emotion}`)
+      // Stop current animation
+      if (actions.current[currentEmotion.current]) {
+        actions.current[currentEmotion.current].stop()
+      }
+      
+      const action = actions.current[emotion]
+      currentEmotion.current = emotion
+      action.reset().play()
+      action.clampWhenFinished = true
+      action.loop = THREE.LoopOnce
+      
+      action.onFinished = () => {
+        console.log('Animation finished, returning to default')
+        const actionKeys = Object.keys(actions.current)
+        if (actionKeys.length > 0) {
+          const defaultAction = actionKeys[0]
+          actions.current[defaultAction].reset().play()
+          actions.current[defaultAction].setLoop(THREE.LoopRepeat)
+          currentEmotion.current = defaultAction
+        }
+      }
+    } else if (emotion) {
+      console.log(`✗ Animation "${emotion}" not found`)
+      console.log('Available:', Object.keys(actions.current))
+    }
+  }, [emotion])
+
+  // THIS NOW WORKS because it is inside Canvas context
+  useFrame((_, delta) => mixer.current?.update(delta))
+
+  return <primitive object={scene} scale={1} position={[0, -2, 0]} />
+}
+
+export default function Avatar({ emotion }) {
+  return (
+    <Canvas
+      style={{ width: '100%', height: '100%' }}
+      camera={{ 
+        position: [0, 0, 5], 
+        fov: 50,
+        near: 0.1,
+        far: 1000
+      }}
+      shadows
+    >
+      <color attach="background" args={['#e6f0ff']} />
+      
+      {/* Improved lighting setup */}
+      <ambientLight intensity={0.6} />
+      <directionalLight 
+        position={[5, 5, 5]} 
+        intensity={1.0} 
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+      />
+      <directionalLight position={[-3, 3, 3]} intensity={0.5} />
+      <pointLight position={[0, 2, 0]} intensity={0.3} />
+      
+      <AvatarModel emotion={emotion} />
+      <OrbitControls 
+        enableZoom={true}
+        enablePan={true}
+        enableRotate={true}
+        maxPolarAngle={Math.PI * 0.9}
+        minPolarAngle={Math.PI * 0.1}
+        maxDistance={15}
+        minDistance={2}
+        target={[0, 0, 0]}
+      />
+    </Canvas>
+  )
+}
